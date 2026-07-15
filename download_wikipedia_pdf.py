@@ -57,7 +57,7 @@ def open_tools_menu(page) -> None:
 
 def download_wikipedia_pdf(url: str, output_path: str | None = None, headless: bool = True) -> Path:
     normalized_url = normalize_wikipedia_url(url)
-    output = Path(output_path or f"downloads/{sanitize_title(normalized_url)}.pdf")
+    output = Path(output_path or f"data/{sanitize_title(normalized_url)}.pdf")
     output.parent.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as playwright:
