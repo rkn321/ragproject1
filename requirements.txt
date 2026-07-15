@@ -1,1 +1,2 @@
 playwright>=1.49.0
+marker-pdf>=1.0.0
