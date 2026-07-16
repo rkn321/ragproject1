@@ -74,6 +74,18 @@ def process_pdf(pdf_path: Path, converter: PdfConverter, chunk_size: int, overla
     ]
 
 
+def already_processed_sources(output_path: Path) -> set[str]:
+    if not output_path.exists():
+        return set()
+    sources: set[str] = set()
+    with output_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                sources.add(json.loads(line)["source"])
+    return sources
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Extract text from PDFs with marker and chunk it for RAG")
     parser.add_argument("input_dir", nargs="?", default="data", help="Folder of PDFs to process")
@@ -90,18 +102,31 @@ def main() -> None:
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Resume support: a PDF's chunks are only ever written after all of them
+    # are computed, so any source already present in the output is complete
+    # and safe to skip (e.g. after an interrupted previous run).
+    done_sources = already_processed_sources(output_path)
+    remaining = [p for p in pdf_paths if p.name not in done_sources]
+    if done_sources:
+        print(f"Skipping {len(pdf_paths) - len(remaining)} already-processed PDF(s).")
+    if not remaining:
+        print("Nothing to do; all PDFs already processed.")
+        return
+
     converter = PdfConverter(artifact_dict=create_model_dict())
 
     total_chunks = 0
-    with output_path.open("w", encoding="utf-8") as f:
-        for pdf_path in pdf_paths:
+    mode = "a" if done_sources else "w"
+    with output_path.open(mode, encoding="utf-8") as f:
+        for pdf_path in remaining:
             print(f"Processing {pdf_path.name}...")
             records = process_pdf(pdf_path, converter, args.chunk_size, args.overlap)
             for record in records:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                f.flush()
             total_chunks += len(records)
 
-    print(f"Wrote {total_chunks} chunks from {len(pdf_paths)} PDFs to {output_path}")
+    print(f"Wrote {total_chunks} chunks from {len(remaining)} PDFs to {output_path}")
 
 
 if __name__ == "__main__":

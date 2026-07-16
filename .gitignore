@@ -2,3 +2,5 @@ downloads/
 __pycache__/
 *.pdf
 .claude/settings.local.json
+vector_store/
+data_ext_vector/
