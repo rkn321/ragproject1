@@ -1,11 +1,20 @@
 import argparse
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 from marker.output import text_from_rendered
+
+HEADING_LINE_RE = re.compile(r"^(#{1,6})\s+(.*)$")
+HTML_TAG_RE = re.compile(r"<[^>]+>")
+IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+NOISE_HEADINGS = {
+    "references", "notes", "citations", "bibliography",
+    "external links", "further reading", "see also",
+}
 
 
 def extract_markdown(pdf_path: Path, converter: PdfConverter) -> str:
@@ -15,6 +24,7 @@ def extract_markdown(pdf_path: Path, converter: PdfConverter) -> str:
 
 
 def split_into_paragraphs(text: str) -> list[str]:
+    text = IMAGE_RE.sub("", text)
     return [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
 
 
@@ -33,42 +43,117 @@ def split_long_paragraph(paragraph: str, chunk_size: int) -> list[str]:
     return pieces
 
 
-def chunk_text(text: str, chunk_size: int = 1500, overlap: int = 200) -> list[str]:
-    """Pack paragraphs into ~chunk_size-character chunks, carrying a bit of
-    trailing context from one chunk into the next so retrieval doesn't lose
-    context at a chunk boundary."""
-    units: list[str] = []
-    for paragraph in split_into_paragraphs(text):
-        if len(paragraph) > chunk_size:
-            units.extend(split_long_paragraph(paragraph, chunk_size))
-        else:
-            units.append(paragraph)
+@dataclass
+class Unit:
+    text: str
+    title: str | None
+    heading: str | None
+    is_reference: bool
 
-    chunks: list[str] = []
-    current = ""
+
+def parse_heading(paragraph: str) -> tuple[int, str] | None:
+    """Return (level, clean heading text) if this paragraph is a markdown
+    heading line. Marker sometimes emits headings like
+    '# <span id="page-4-3"></span>**References**' (an HTML anchor before the
+    bold text), so strip HTML tags and markdown emphasis markers rather than
+    relying on a single regex to capture the clean text directly."""
+    match = HEADING_LINE_RE.match(paragraph)
+    if not match:
+        return None
+    level = len(match.group(1))
+    text = HTML_TAG_RE.sub("", match.group(2)).strip("* _").strip()
+    return level, text
+
+
+def build_units(text: str, chunk_size: int) -> list[Unit]:
+    """Walk the markdown paragraph by paragraph, tracking the article title
+    (first H1) and the nearest heading, and flagging paragraphs that fall
+    under a references/citations-style section."""
+    title: str | None = None
+    heading: str | None = None
+    is_reference = False
+    units: list[Unit] = []
+
+    for paragraph in split_into_paragraphs(text):
+        parsed = parse_heading(paragraph)
+        if parsed:
+            level, heading_text = parsed
+            heading = heading_text
+            if level == 1 and title is None:
+                title = heading_text
+            is_reference = heading_text.lower() in NOISE_HEADINGS
+            # Store the cleaned heading text, not the raw paragraph, so
+            # leftover HTML anchors don't leak into the embedded chunk text.
+            units.append(Unit("#" * level + " " + heading_text, title, heading, is_reference))
+            continue
+
+        pieces = split_long_paragraph(paragraph, chunk_size) if len(paragraph) > chunk_size else [paragraph]
+        units.extend(Unit(piece, title, heading, is_reference) for piece in pieces)
+
+    return units
+
+
+def pack_chunks(units: list[Unit], chunk_size: int, overlap: int) -> list[dict]:
+    """Greedily pack units into ~chunk_size-character chunks. Overlap is
+    carried forward at unit granularity (whole paragraphs/sentences), never
+    a raw character slice, so a chunk boundary never lands mid-link or
+    mid-word."""
+    chunks: list[dict] = []
+    current: list[Unit] = []
+    current_len = 0
+
+    def flush() -> None:
+        if not current:
+            return
+        body = "\n\n".join(u.text for u in current)
+        title = current[0].title or ""
+        heading = current[-1].heading or ""
+        parts = [p for p in (title, heading) if p]
+        if len(parts) == 2 and parts[0] == parts[1]:
+            parts = parts[:1]
+        breadcrumb = " > ".join(parts)
+        text = f"{breadcrumb}\n\n{body}" if breadcrumb else body
+        chunks.append({
+            "text": text,
+            "title": title,
+            "heading": heading,
+            "is_reference": any(u.is_reference for u in current),
+        })
+
     for unit in units:
-        candidate = f"{current}\n\n{unit}".strip() if current else unit
-        if current and len(candidate) > chunk_size:
-            chunks.append(current)
-            tail = current[-overlap:]
-            current = f"{tail}\n\n{unit}".strip()
-        else:
-            current = candidate
-    if current:
-        chunks.append(current)
+        unit_len = len(unit.text)
+        if current and current_len + unit_len + 2 > chunk_size:
+            flush()
+            carry: list[Unit] = []
+            carry_len = 0
+            for u in reversed(current):
+                if carry_len + len(u.text) > overlap:
+                    break
+                carry.insert(0, u)
+                carry_len += len(u.text) + 2
+            current = carry
+            current_len = carry_len
+        current.append(unit)
+        current_len += unit_len + 2
+
+    flush()
     return chunks
 
 
 def process_pdf(pdf_path: Path, converter: PdfConverter, chunk_size: int, overlap: int) -> list[dict]:
     markdown = extract_markdown(pdf_path, converter)
-    chunks = chunk_text(markdown, chunk_size=chunk_size, overlap=overlap)
+    units = build_units(markdown, chunk_size)
+    chunks = pack_chunks(units, chunk_size, overlap)
     return [
         {
             "id": f"{pdf_path.stem}::{i}",
             "source": pdf_path.name,
             "chunk_index": i,
-            "text": chunk,
-            "char_count": len(chunk),
+            "text": chunk["text"],
+            "title": chunk["title"],
+            "heading": chunk["heading"],
+            "is_reference": chunk["is_reference"],
+            "char_count": len(chunk["text"]),
         }
         for i, chunk in enumerate(chunks)
     ]
@@ -88,16 +173,16 @@ def already_processed_sources(output_path: Path) -> set[str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Extract text from PDFs with marker and chunk it for RAG")
-    parser.add_argument("input_dir", nargs="?", default="data", help="Folder of PDFs to process")
+    parser.add_argument("input_path", nargs="?", default="data", help="A single PDF, or a folder of PDFs to process")
     parser.add_argument("--output", default="chunks/chunks.jsonl", help="Output JSONL path")
     parser.add_argument("--chunk-size", type=int, default=1500, help="Max characters per chunk")
     parser.add_argument("--overlap", type=int, default=200, help="Characters of overlap carried into the next chunk")
     args = parser.parse_args()
 
-    input_dir = Path(args.input_dir)
-    pdf_paths = sorted(input_dir.glob("*.pdf"))
+    input_path = Path(args.input_path)
+    pdf_paths = [input_path] if input_path.is_file() else sorted(input_path.glob("*.pdf"))
     if not pdf_paths:
-        raise SystemExit(f"No PDFs found in {input_dir}")
+        raise SystemExit(f"No PDFs found in {input_path}")
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

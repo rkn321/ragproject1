@@ -6,6 +6,8 @@ import chromadb
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 
+from rag_core import DEFAULT_COLLECTION, DEFAULT_EMBEDDING_MODEL, DEFAULT_PERSIST_DIR
+
 
 def load_chunks(path: Path) -> list[dict]:
     chunks = []
@@ -20,9 +22,9 @@ def load_chunks(path: Path) -> list[dict]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Embed chunked text and store it in a local Chroma vector index")
     parser.add_argument("--chunks", default="data_ext_vector/chunks.jsonl", help="Path to the chunks JSONL file")
-    parser.add_argument("--persist-dir", default="vector_store", help="Directory to persist the Chroma index")
-    parser.add_argument("--collection", default="wikipedia_articles", help="Chroma collection name")
-    parser.add_argument("--model", default="all-MiniLM-L6-v2", help="sentence-transformers model name")
+    parser.add_argument("--persist-dir", default=DEFAULT_PERSIST_DIR, help="Directory to persist the Chroma index")
+    parser.add_argument("--collection", default=DEFAULT_COLLECTION, help="Chroma collection name")
+    parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL, help="sentence-transformers model name")
     parser.add_argument("--batch-size", type=int, default=64, help="Embedding/upsert batch size")
     args = parser.parse_args()
 
@@ -41,7 +43,16 @@ def main() -> None:
 
     ids = [c["id"] for c in chunks]
     documents = [c["text"] for c in chunks]
-    metadatas = [{"source": c["source"], "chunk_index": c["chunk_index"]} for c in chunks]
+    metadatas = [
+        {
+            "source": c["source"],
+            "chunk_index": c["chunk_index"],
+            "title": c.get("title") or "",
+            "heading": c.get("heading") or "",
+            "is_reference": bool(c.get("is_reference", False)),
+        }
+        for c in chunks
+    ]
 
     print("Embedding chunks...")
     embeddings = model.encode(
