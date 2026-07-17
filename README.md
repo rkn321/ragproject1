@@ -21,8 +21,13 @@ python -m playwright install chromium
 You also need [Ollama](https://ollama.com) running locally with a model pulled:
 
 ```bash
-ollama pull llama3.2:3b
+ollama pull qwen2.5:3b
 ```
+
+`qwen2.5:3b` (~2 GB) is the default: it fits on a CPU-only machine with ~16 GB
+RAM and follows the "answer only from the excerpts, cite the source" system
+prompt well. If you have headroom to spare, `qwen2.5:7b` (~4.7 GB) reasons
+noticeably better at the cost of a few seconds per answer.
 
 ## Usage
 
@@ -115,7 +120,7 @@ All chat/index scripts accept these (see `--help` for the full list):
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--llm-model` | `llama3.2:3b` | Ollama model tag used for generation |
+| `--llm-model` | `qwen2.5:3b` | Ollama model tag used for generation |
 | `--model` | `all-MiniLM-L6-v2` | Embedding model (must match between indexing and chat) |
 | `--top-k` | `5` | Number of chunks retrieved per question |
 | `--max-distance` | `1.2` | Reject retrieval if the best match is farther than this |

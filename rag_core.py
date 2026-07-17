@@ -14,7 +14,13 @@ DEFAULT_CHUNKS_PATH = "data_ext_vector/chunks.jsonl"
 DEFAULT_PERSIST_DIR = "vector_store"
 DEFAULT_COLLECTION = "wikipedia_articles"
 DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-DEFAULT_LLM_MODEL = "llama3.2:3b"
+# Same ~2GB footprint as llama3.2:3b, but noticeably better at the shape of
+# this task: following the "only from the excerpts, cite the source" system
+# prompt, staying concise, and formatting citations as instructed. Both fit
+# CPU inference on ~15GB RAM; swap in `qwen2.5:7b` (~4.7GB) for stronger
+# reasoning if you have the headroom and can accept a few-seconds-per-answer
+# slowdown.
+DEFAULT_LLM_MODEL = "qwen2.5:3b"
 DEFAULT_TOP_K = 5
 
 # Chroma's default distance metric is squared L2. Embeddings are normalized
