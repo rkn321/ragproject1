@@ -32,9 +32,23 @@ PAGE = """
   form { display: flex; gap: 0.5rem; }
   input[type=text] { flex: 1; padding: 0.5rem; font-size: 1rem; }
   button { padding: 0.5rem 1rem; font-size: 1rem; }
+  details { margin-bottom: 1rem; border: 1px solid #ddd; border-radius: 8px; padding: 0.5rem 0.75rem; }
+  summary { cursor: pointer; font-weight: 600; }
+  .topics { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.75rem; }
+  .topic { background: #eef2f7; border: 1px solid #d6dee8; border-radius: 999px;
+           padding: 0.2rem 0.7rem; font-size: 0.85em; cursor: pointer; }
+  .topic:hover { background: #dde0e6; }
+  .hint { font-size: 0.85em; color: #666; margin: 0.5rem 0 0; }
 </style>
 <h2>Horology RAG Chatbot</h2>
 <p>Ask questions about the indexed Wikipedia articles ({{ chunk_count }} chunks indexed). Answers are grounded in retrieved excerpts and cite sources.</p>
+<details open>
+  <summary>{{ titles|length }} topics indexed &mdash; questions outside these will be declined</summary>
+  <div class="topics">
+    {% for t in titles %}<span class="topic" data-topic="{{ t }}">{{ t }}</span>{% endfor %}
+  </div>
+  <p class="hint">Click a topic to start a question about it.</p>
+</details>
 <div id="log"></div>
 <form id="form">
   <input type="text" id="input" autocomplete="off" placeholder="Ask a question..." />
@@ -45,6 +59,13 @@ PAGE = """
   const form = document.getElementById('form');
   const input = document.getElementById('input');
   let history = [];
+
+  document.querySelectorAll('.topic').forEach(el => {
+    el.addEventListener('click', () => {
+      input.value = 'What is ' + el.dataset.topic + '?';
+      input.focus();
+    });
+  });
 
   function addMessage(role, text, sources) {
     const div = document.createElement('div');
@@ -92,7 +113,11 @@ def create_app(retriever: Retriever, llm_model: str, top_k: int, max_distance: f
 
     @app.get("/")
     def index():
-        return render_template_string(PAGE, chunk_count=retriever.collection.count())
+        return render_template_string(
+            PAGE,
+            chunk_count=retriever.collection.count(),
+            titles=retriever.indexed_titles(),
+        )
 
     @app.post("/api/chat")
     def api_chat():

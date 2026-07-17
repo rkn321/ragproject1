@@ -1,4 +1,5 @@
 import re
+from pathlib import Path
 from dataclasses import dataclass
 
 import chromadb
@@ -72,6 +73,27 @@ class Retriever:
         self.collection = client.get_or_create_collection(collection)
         if self.collection.count() == 0:
             raise SystemExit(f"Collection '{collection}' is empty. Run build_index.py first.")
+
+    def indexed_titles(self) -> list[str]:
+        """One article title per indexed source, so the UI can list what it can
+        answer on rather than carrying a hand-maintained copy.
+
+        Resolved per source rather than as a set over the title field: chunks
+        that precede an article's first heading (page-top captions) carry no
+        title, and treating those as their own entry lists every article twice.
+        """
+        metadatas = self.collection.get(include=["metadatas"])["metadatas"]
+        by_source: dict[str, str] = {}
+        for meta in metadatas:
+            source = meta.get("source")
+            title = (meta.get("title") or "").strip()
+            if source and title:
+                by_source.setdefault(source, title)
+        for meta in metadatas:
+            source = meta.get("source")
+            if source:
+                by_source.setdefault(source, Path(source).stem.replace("_", " "))
+        return sorted(by_source.values())
 
     def retrieve(self, query: str, top_k: int = DEFAULT_TOP_K, include_references: bool = False) -> list[RetrievedChunk]:
         query_embedding = self.embedder.encode([query], normalize_embeddings=True).tolist()
