@@ -40,12 +40,20 @@ Saves to `data/<Article_Title>.pdf` by default, or pass `--output <path>`.
 python extract_and_chunk.py
 ```
 
-Converts every PDF in `data/` to markdown via [marker](https://github.com/datalab-to/marker), then
-splits it into ~1500-character chunks and writes `data_ext_vector/chunks.jsonl`.
+Converts every PDF in `data/` to markdown, splits it into ~1000-character chunks, and writes
+`data_ext_vector/chunks.jsonl`. The whole corpus takes about 20 seconds.
 
-This is the slow step — marker runs layout detection and OCR models, so expect several minutes per
-PDF on CPU (the first run also downloads a few GB of models). It's **resumable**: if it's
-interrupted, just run it again and it skips PDFs already present in the output file.
+These are born-digital PDFs, so their text and font metadata are already in the file. The extractor
+reads that text layer directly with [pdftext](https://github.com/datalab-to/pdftext) and infers
+heading levels from relative font size, rather than running OCR and layout models to rediscover
+structure the file already carries.
+
+It's **resumable**: if interrupted, run it again and it skips PDFs already in the output file. You
+can also pass a single PDF instead of a folder:
+
+```bash
+python extract_and_chunk.py data/Tourbillon.pdf --output data_ext_vector/tourbillon.jsonl
+```
 
 ### 3. Build the vector index
 
@@ -79,11 +87,27 @@ LLM as reference excerpts, with instructions to answer only from those excerpts 
 article. A few details worth knowing:
 
 - **Off-topic questions are rejected.** If the best match is farther than `--max-distance`, the bot
-  says it has no relevant content instead of letting the LLM improvise an answer.
-- **Follow-up questions work.** A vague follow-up ("what is it made of?") is combined with the
-  previous turn before embedding, so the retrieval query still has enough context to match.
+  says it has no relevant content instead of letting the LLM improvise an answer. On this corpus
+  on-topic questions score 0.46-0.94 and unrelated ones 1.34-1.69, so the 1.2 default sits in the
+  gap. It isn't a perfect split: a question using a synonym the article doesn't ("hairspring" where
+  the text says "balance spring") can be refused even though the answer is there.
+- **Follow-up questions work.** A follow-up that leans on a pronoun ("what is it made of?") is
+  combined with the previous turn before embedding, so the retrieval query can resolve it. Questions
+  that carry their own subject are left alone — enriching those would drag the old topic into every
+  later question.
 - **Reference sections are excluded** from retrieval by default, since citation lists are mostly
-  URLs and add noise. Pass `--include-references` to index them anyway.
+  bibliographic noise. Pass `--include-references` to search them anyway.
+- **Link URLs are dropped** from chunk text. The anchor text carries the meaning, while hrefs are
+  semantically empty and were eating ~44% of every chunk's tokens — enough to push most chunks past
+  the embedding model's 256-token limit, where the overflow is silently truncated.
+
+### Chunk size and the embedding model
+
+`all-MiniLM-L6-v2` truncates at **256 tokens**, silently: a longer chunk is still stored and shown
+to the LLM in full, but only its opening is searchable. The `--chunk-size 1000` default keeps the
+median body chunk near 196 tokens. What still overruns is mostly reference lists, which tokenize
+badly and are excluded from retrieval anyway. If you raise `--chunk-size`, switch to an embedding
+model with a longer limit (e.g. `BAAI/bge-small-en-v1.5` at 512) or you'll silently lose the tails.
 
 ## Common options
 
@@ -94,5 +118,6 @@ All chat/index scripts accept these (see `--help` for the full list):
 | `--llm-model` | `llama3.2:3b` | Ollama model tag used for generation |
 | `--model` | `all-MiniLM-L6-v2` | Embedding model (must match between indexing and chat) |
 | `--top-k` | `5` | Number of chunks retrieved per question |
-| `--max-distance` | `1.7` | Reject retrieval if the best match is farther than this |
+| `--max-distance` | `1.2` | Reject retrieval if the best match is farther than this |
+| `--chunk-size` | `1000` | Max characters per chunk (see note above before raising) |
 | `--persist-dir` | `vector_store` | Where the Chroma index lives |
