@@ -173,16 +173,16 @@ def already_processed_sources(output_path: Path) -> set[str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Extract text from PDFs with marker and chunk it for RAG")
-    parser.add_argument("input_dir", nargs="?", default="data", help="Folder of PDFs to process")
+    parser.add_argument("input_path", nargs="?", default="data", help="A single PDF, or a folder of PDFs to process")
     parser.add_argument("--output", default="chunks/chunks.jsonl", help="Output JSONL path")
     parser.add_argument("--chunk-size", type=int, default=1500, help="Max characters per chunk")
     parser.add_argument("--overlap", type=int, default=200, help="Characters of overlap carried into the next chunk")
     args = parser.parse_args()
 
-    input_dir = Path(args.input_dir)
-    pdf_paths = sorted(input_dir.glob("*.pdf"))
+    input_path = Path(args.input_path)
+    pdf_paths = [input_path] if input_path.is_file() else sorted(input_path.glob("*.pdf"))
     if not pdf_paths:
-        raise SystemExit(f"No PDFs found in {input_dir}")
+        raise SystemExit(f"No PDFs found in {input_path}")
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
