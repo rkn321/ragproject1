@@ -1,4 +1,5 @@
 import argparse
+import sys
 
 from rag_core import (
     DEFAULT_COLLECTION,
@@ -20,6 +21,13 @@ from rag_core import (
 
 
 def main() -> None:
+    # The corpus contains non-Latin-1 text (e.g. "Hattori Seikō"), and a
+    # Windows console defaults to cp1252, which raises UnicodeEncodeError
+    # mid-answer rather than dropping the character.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(description="Chat with a RAG assistant over the indexed Wikipedia articles")
     parser.add_argument("--persist-dir", default=DEFAULT_PERSIST_DIR, help="Directory the Chroma index was persisted to")
     parser.add_argument("--collection", default=DEFAULT_COLLECTION, help="Chroma collection name")

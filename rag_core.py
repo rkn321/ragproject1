@@ -1,3 +1,5 @@
+import re
+from pathlib import Path
 from dataclasses import dataclass
 
 import chromadb
@@ -8,17 +10,39 @@ from sentence_transformers import SentenceTransformer
 # Centralized so build_index.py, rag_chat.py, and app.py can't silently drift
 # out of sync (e.g. indexing with one embedding model but querying with
 # another, which would silently degrade retrieval quality).
+DEFAULT_CHUNKS_PATH = "data_ext_vector/chunks.jsonl"
 DEFAULT_PERSIST_DIR = "vector_store"
 DEFAULT_COLLECTION = "wikipedia_articles"
 DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-DEFAULT_LLM_MODEL = "llama3.2:3b"
+# Same ~2GB footprint as llama3.2:3b, but noticeably better at the shape of
+# this task: following the "only from the excerpts, cite the source" system
+# prompt, staying concise, and formatting citations as instructed. Both fit
+# CPU inference on ~15GB RAM; swap in `qwen2.5:7b` (~4.7GB) for stronger
+# reasoning if you have the headroom and can accept a few-seconds-per-answer
+# slowdown.
+DEFAULT_LLM_MODEL = "qwen2.5:3b"
 DEFAULT_TOP_K = 5
 
 # Chroma's default distance metric is squared L2. Embeddings are normalized
 # to unit length, so squared L2 and cosine distance are monotonically
-# related; this cutoff is an approximate heuristic (calibrated by comparing
-# on-topic vs. clearly-unrelated queries), not an exact similarity bound.
-DEFAULT_MAX_DISTANCE = 1.7
+# related; this cutoff is an approximate heuristic, not an exact bound.
+#
+# Calibrated over the full 28-article index: on-topic questions land at
+# 0.46-0.94, clearly unrelated ones at 1.34-1.69. 1.2 sits in that gap. The
+# earlier 1.7 was measured against a single-article index and rejected nothing
+# once the corpus grew, since a larger corpus always offers some nearer match.
+#
+# This does not separate perfectly. A question using a synonym the source
+# doesn't ("hairspring" where the text says "balance spring") can land past
+# the cutoff and be refused despite the answer being present.
+DEFAULT_MAX_DISTANCE = 1.2
+
+# Referring expressions that make a question depend on the previous turn.
+ANAPHORA_RE = re.compile(
+    r"\b(it|its|it's|they|them|their|theirs|that|this|those|these|he|him|his|"
+    r"she|her|hers|one|ones|same|such)\b",
+    re.IGNORECASE,
+)
 
 SYSTEM_PROMPT = """You are a helpful assistant answering questions using only the provided \
 reference excerpts from Wikipedia articles about horology (watches, clocks, and timekeeping).
@@ -56,6 +80,27 @@ class Retriever:
         if self.collection.count() == 0:
             raise SystemExit(f"Collection '{collection}' is empty. Run build_index.py first.")
 
+    def indexed_titles(self) -> list[str]:
+        """One article title per indexed source, so the UI can list what it can
+        answer on rather than carrying a hand-maintained copy.
+
+        Resolved per source rather than as a set over the title field: chunks
+        that precede an article's first heading (page-top captions) carry no
+        title, and treating those as their own entry lists every article twice.
+        """
+        metadatas = self.collection.get(include=["metadatas"])["metadatas"]
+        by_source: dict[str, str] = {}
+        for meta in metadatas:
+            source = meta.get("source")
+            title = (meta.get("title") or "").strip()
+            if source and title:
+                by_source.setdefault(source, title)
+        for meta in metadatas:
+            source = meta.get("source")
+            if source:
+                by_source.setdefault(source, Path(source).stem.replace("_", " "))
+        return sorted(by_source.values())
+
     def retrieve(self, query: str, top_k: int = DEFAULT_TOP_K, include_references: bool = False) -> list[RetrievedChunk]:
         query_embedding = self.embedder.encode([query], normalize_embeddings=True).tolist()
         where = None if include_references else {"is_reference": False}
@@ -67,11 +112,21 @@ class Retriever:
 
 
 def build_retrieval_query(question: str, history: list[dict]) -> str:
-    """Enrich the retrieval query with the previous user turn so vague
-    follow-ups (e.g. "What is it made of?") still retrieve relevant chunks,
-    since the embedding model has no other way to resolve the pronoun."""
+    """Prepend the previous user turn, but only for follow-ups that actually
+    depend on it (e.g. "What is it made of?"), since the embedding model has
+    no other way to resolve the pronoun.
+
+    Enriching unconditionally drags the old topic into every later question:
+    asking "What is a tourbillon?" right after a Seiko question retrieved
+    Seiko, and an unrelated question inherited enough of the previous topic to
+    slip past the off-topic distance check instead of being refused.
+    """
     previous_questions = [m["content"] for m in history if m["role"] == "user"]
     if not previous_questions:
+        return question
+    # A question carrying its own subject is self-contained; only one leaning
+    # on a referring expression needs the earlier turn.
+    if len(question.split()) > 12 or not ANAPHORA_RE.search(question):
         return question
     return f"{previous_questions[-1]}\n{question}"
 

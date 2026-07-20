@@ -6,7 +6,12 @@ import chromadb
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 
-from rag_core import DEFAULT_COLLECTION, DEFAULT_EMBEDDING_MODEL, DEFAULT_PERSIST_DIR
+from rag_core import (
+    DEFAULT_CHUNKS_PATH,
+    DEFAULT_COLLECTION,
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_PERSIST_DIR,
+)
 
 
 def load_chunks(path: Path) -> list[dict]:
@@ -21,7 +26,7 @@ def load_chunks(path: Path) -> list[dict]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Embed chunked text and store it in a local Chroma vector index")
-    parser.add_argument("--chunks", default="data_ext_vector/chunks.jsonl", help="Path to the chunks JSONL file")
+    parser.add_argument("--chunks", default=DEFAULT_CHUNKS_PATH, help="Path to the chunks JSONL file")
     parser.add_argument("--persist-dir", default=DEFAULT_PERSIST_DIR, help="Directory to persist the Chroma index")
     parser.add_argument("--collection", default=DEFAULT_COLLECTION, help="Chroma collection name")
     parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL, help="sentence-transformers model name")
